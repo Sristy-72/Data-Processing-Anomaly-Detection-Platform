@@ -78,3 +78,14 @@ def get_datasets():
     db.close()
 
     return datasets
+
+
+@app.get("/anomalies")
+def get_anomalies():
+    db = SessionLocal()
+
+    anomalies = db.query(Anomaly).all()
+
+    db.close()
+
+    return anomalies
