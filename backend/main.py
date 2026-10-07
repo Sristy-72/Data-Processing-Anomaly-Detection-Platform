@@ -1,10 +1,13 @@
 from fastapi import FastAPI, UploadFile, File
 import pandas as pd
+import io
 
+from backend.s3_service import upload_file_to_s3
 from backend.data_processor import clean_dataset, get_dataset_summary
 from backend.anomaly_detector import detect_anomalies
 from backend.database import SessionLocal
 from backend.models import Dataset, Anomaly
+from backend.s3_service import upload_file_to_s3, download_file_from_s3
 
 
 app = FastAPI()
@@ -22,7 +25,20 @@ def health_check():
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    df = pd.read_csv(file.file)
+
+    # Read uploaded file
+    file_content = await file.read()
+
+    # Upload original file to S3
+    s3_uri = upload_file_to_s3(
+        file_content,
+        file.filename
+    )
+
+    # Read CSV using the same file content
+    df = pd.read_csv(
+        io.BytesIO(file_content)
+    )
 
     # Clean dataset
     df, processing_stats = clean_dataset(df)
@@ -45,6 +61,7 @@ async def upload_file(file: UploadFile = File(...)):
 
     # Save anomalies
     for _, row in df[df["is_anomaly"]].iterrows():
+
         anomaly = Anomaly(
             dataset_id=dataset.id,
             transaction_id=row["transaction_id"],
@@ -63,6 +80,7 @@ async def upload_file(file: UploadFile = File(...)):
 
     return {
         "filename": file.filename,
+        "s3_location": s3_uri,
         "processing": processing_stats,
         "summary": summary,
         "anomaly_detection": anomaly_stats
@@ -71,6 +89,7 @@ async def upload_file(file: UploadFile = File(...)):
 
 @app.get("/datasets")
 def get_datasets():
+
     db = SessionLocal()
 
     datasets = db.query(Dataset).all()
@@ -82,6 +101,7 @@ def get_datasets():
 
 @app.get("/anomalies")
 def get_anomalies():
+
     db = SessionLocal()
 
     anomalies = db.query(Anomaly).all()
@@ -89,3 +109,26 @@ def get_anomalies():
     db.close()
 
     return anomalies
+
+
+@app.post("/process-s3")
+def process_s3_file():
+
+    file_content = download_file_from_s3("transactions.csv")
+
+    df = pd.read_csv(
+        io.BytesIO(file_content)
+    )
+
+    # Clean dataset
+    df, processing_stats = clean_dataset(df)
+
+    # Detect anomalies
+    df, anomaly_stats = detect_anomalies(df)
+
+    return {
+        "filename": "transactions.csv",
+        "processing": processing_stats,
+        "summary": get_dataset_summary(df),
+        "anomaly_detection": anomaly_stats
+    }
